@@ -1,0 +1,179 @@
+/* ÂèÇËÄÉ:
+ * drivers\block\xd.c
+ * drivers\block\z2ram.c
+ */
+
+#include <linux/module.h>
+#include <linux/errno.h>
+#include <linux/interrupt.h>
+#include <linux/mm.h>
+#include <linux/fs.h>
+#include <linux/kernel.h>
+#include <linux/timer.h>
+#include <linux/genhd.h>
+#include <linux/hdreg.h>
+#include <linux/ioport.h>
+#include <linux/init.h>
+#include <linux/wait.h>
+#include <linux/blkdev.h>
+#include <linux/blkpg.h>
+#include <linux/delay.h>
+#include <linux/io.h>
+
+//#include <asm/system.h>
+#include <asm/uaccess.h>
+#include <asm/dma.h>
+
+
+struct ramblock_dev
+{
+    unsigned long size;
+};
+
+
+typedef struct request_queue request_queue_t;
+
+static struct gendisk *ramblock_disk;
+static request_queue_t *ramblock_queue;
+
+static int major;
+
+static DEFINE_SPINLOCK(ramblock_lock);
+
+#define RAMBLOCK_SIZE (1024*1024)
+static unsigned char *ramblock_buf;
+
+static int ramblock_getgeo(struct block_device *bdev, struct hd_geometry *geo)
+{
+    /* ÂÆπÈáè=heads*cylinders*sectors*512 */
+    geo->heads     = 2;
+    geo->cylinders = 32;
+    geo->sectors   = RAMBLOCK_SIZE/2/32/512;
+    return 0;
+}
+
+static int ramblock_open(struct inode *inode,struct file *filp )
+{
+    struct ramblock_dev *dev = inode->i_bdev->bd_disk->private_data;
+    filp->private_data = dev;
+
+    return 0;
+}
+int ramblock_ioctl(struct inode *inode,struct file *filp,unsigned int cmd,unsigned long arg)
+{
+    long size;
+    struct hd_geometry geo;
+    struct ramblock_dev *dev = filp->private_data;
+    switch (cmd)
+    {
+        case HDIO_GETGEO:
+            size = dev->size;// *(hardsect_size / KERNEL_SECTOR_SIZE);
+            geo.cylinders = (size &~0x3f) >> 6;
+            geo.heads = 4;
+            geo.sectors = 16;
+            geo.start = 4;
+            if (copy_to_user((void __user*)arg, &geo, sizeof(geo)))
+            {
+                return  - EFAULT;
+            }
+            return 0;
+    }
+
+    return  - ENOTTY; //≤ª÷™µ¿µƒ√¸¡Ó
+}
+
+static struct block_device_operations ramblock_fops =
+{
+    .owner  = THIS_MODULE,
+    .getgeo = ramblock_getgeo,
+};
+
+static void do_ramblock_request(struct request_queue * q)
+{
+    static int r_cnt = 0;
+    static int w_cnt = 0;
+    static int cnt = 0;
+    struct request *rq;
+    uint64_t pos = 0;
+    int rv;
+    unsigned long len=0;
+    
+    printk("do_ramblock_request %d\n", ++cnt);
+
+    while ((rq = blk_fetch_request(q)) != NULL)//ªÒ»°I/O«Î«Û∂”¡–÷–œ¬“ª∏ˆ«Î«Û∫Ø ˝
+    {
+        spin_unlock_irq(q->queue_lock);//√ªƒ√µΩ“ª∏ˆrequest£¨æÕæÕÕÀ≥ˆÀ¯
+        if(rq->cmd_type != REQ_TYPE_FS)
+        {
+            rv = -EIO;//∑«Œƒº˛œµÕ≥µƒ«Î«Û
+            goto skip;
+        }
+        pos = blk_rq_pos(rq)*512;//∑µªÿ∆ º…»«¯∫≈*512æÕ «∆´“∆µÿ÷∑
+        len = blk_rq_bytes(rq);//«Î«Ûµƒ◊÷Ω⁄ ˝£¨…»«¯◊÷Ω⁄µƒ’˚ ˝±∂
+        if((pos+len)>RAMBLOCK_SIZE)
+        {
+            pr_crit("ramblock:Beyond-end write(%llu %zx)\n",pos,len);
+            rv = -EIO;
+            goto skip;
+        }
+        struct bio_vec = NULL;//∂®“Â∂ŒΩ·ππÃÂ
+        struct req_iterator iter;
+        void *kaddr = NULL;
+        rq_for_each_segment()
+        
+        if (rq_data_dir(rq) == READ)
+        {
+            printk("do_ramblock_request read %d\n", ++r_cnt);
+        //    memcpy(req->buffer, ramblock_buf+offset, len);
+        }
+        else
+        {
+            printk("do_ramblock_request write %d\n", ++w_cnt);
+        //    memcpy(ramblock_buf+offset, req->buffer, len);
+        }
+
+        blk_end_request_cur(req, 1);
+    }
+}
+
+static int ramblock_init(void)
+{
+    /* 1. ∑÷≈‰gendisk */
+    ramblock_disk = alloc_disk(16); //¥Œ…Ë±∏∫≈16
+
+    /* 2.  */
+    /* 2.1 ≥ı ºªØ«Î«Û∂”¡–£¨∑÷≈‰«Î«Û≤¢∞Û∂® */
+    ramblock_queue = blk_init_queue(do_ramblock_request, &ramblock_lock);
+    ramblock_disk->queue = ramblock_queue;
+
+    /* 2.2 ◊¢≤·…Ë±∏«˝∂Ø */
+    major = register_blkdev(0, "ramblock");  /* cat /proc/devices */
+    ramblock_disk->major       = major;
+    ramblock_disk->first_minor = 0;
+    sprintf(ramblock_disk->disk_name, "ramblock");
+    ramblock_disk->fops        = &ramblock_fops;
+    set_capacity(ramblock_disk, RAMBLOCK_SIZE / 512);
+
+    /* 3.  ”≤º˛œ‡πÿ≤Ÿ◊˜ */
+    ramblock_buf = kzalloc(RAMBLOCK_SIZE, GFP_KERNEL);
+
+    /* 4. ÃÌº”gendisk device */
+    add_disk(ramblock_disk);
+
+    return 0;
+}
+
+static void ramblock_exit(void)
+{
+    unregister_blkdev(major, "ramblock");
+    del_gendisk(ramblock_disk);
+    put_disk(ramblock_disk);
+    blk_cleanup_queue(ramblock_queue);
+
+    kfree(ramblock_buf);
+}
+
+module_init(ramblock_init);
+module_exit(ramblock_exit);
+
+MODULE_LICENSE("GPL");

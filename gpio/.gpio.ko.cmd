@@ -1,0 +1,1 @@
+cmd_/mnt/hgfs/Share/driver_module/gpio/gpio.ko := /home/ram/openwrt/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/bin/mipsel-openwrt-linux-ld -r  -m elf32ltsmip -T ./scripts/module-common.lds -s --build-id  -o /mnt/hgfs/Share/driver_module/gpio/gpio.ko /mnt/hgfs/Share/driver_module/gpio/gpio.o /mnt/hgfs/Share/driver_module/gpio/gpio.mod.o
